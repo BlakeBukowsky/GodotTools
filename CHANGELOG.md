@@ -3,6 +3,18 @@
 All notable changes to this project will be documented here. Versions on the Godot addon
 (`addons/agent_tools/plugin.cfg`) and the MCP shim (`mcp/package.json`) stay in sync.
 
+## [0.3.1] — 2026-06-06
+
+Bug-fix release.
+
+### Fixed
+
+- **`resources/templates/list` no longer errors in Continue / other MCP clients.** The shim handled `resources/list` and `resources/read` but not `resources/templates/list`, which some clients (VS Code's Continue plugin) probe during connection setup. The unhandled method returned JSON-RPC `-32601` ("Method not found"), which Continue surfaced as `Error loading resource templates for MCP Server godot-agent-tools`. The shim now registers a handler returning an empty template list (this server exposes only fixed-URI resources, no URI templates). Tools and resources were unaffected — this only silences the spurious error prompt.
+- **`scene.set_property` no longer silently drops node-typed `@export` references.** An `@export var foo: Node2D` (TYPE_OBJECT with a `PROPERTY_HINT_NODE_TYPE` hint) was assigned the raw path string, which `PackedScene.pack()` dropped at save time — the property was absent from the `.tscn`. The tool now resolves the path string to the actual Node (relative to the target node) and assigns the reference, so Godot emits the `node_paths=PackedStringArray(...)` metadata and serializes it exactly like an inspector drag-drop. Pass `null` to clear.
+- **`scene.set_property` now sets `unique_name_in_owner` (and other setter-routed properties).** `PROPERTY_USAGE_NO_EDITOR` properties like `unique_name_in_owner` don't reliably dispatch through `node.set()`; the value was dropped while the tool reported success. The tool now detects the failed readback and routes through the explicit `set_<name>` setter when one exists.
+- **`scene.set_property` surfaces silently-dropped boolean assignments** instead of echoing a misleading value, closing the "tool succeeded → assume done" trap for the most common case.
+- `scene.build_tree` shares the same hardened assignment path, so all three fixes apply to bulk subtree construction too.
+
 ## [0.3.0] — 2026-04-21
 
 Competitive-parity pass against the broader Godot-AI tool surface, plus MCP Resources.

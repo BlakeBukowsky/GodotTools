@@ -8,6 +8,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import net from "node:net";
@@ -1309,7 +1310,7 @@ class GodotClient {
 const client = new GodotClient(HOST);
 
 const server = new Server(
-  { name: "godot-agent-tools", version: "0.3.0" },
+  { name: "godot-agent-tools", version: "0.3.1" },
   { capabilities: { tools: {}, resources: {} } }
 );
 
@@ -1429,6 +1430,15 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => ({
     description,
     mimeType,
   })),
+}));
+
+// resources/templates/list — this server exposes only fixed-URI resources, not
+// URI templates. But MCP clients (e.g. VS Code's Continue plugin) probe this
+// method during connection setup; without a handler the SDK answers -32601
+// "Method not found", which Continue surfaces as a scary "Error loading resource
+// templates" prompt. Answer with an empty template list so the probe succeeds.
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: [],
 }));
 
 server.setRequestHandler(ReadResourceRequestSchema, async (req) => {

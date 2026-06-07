@@ -120,26 +120,96 @@ static func set_property(params: Dictionary) -> Dictionary:
 	if int(prop_info.get("usage", 0)) & PROPERTY_USAGE_READ_ONLY:
 		return _err(-32602, "property '%s' on %s is read-only" % [property_name, node.get_class()])
 
-	var coerced = Coerce.coerce(params.get("value"), prop_info.type)
-	if coerced is Dictionary and coerced.has("_error"):
-		return _err(-32602, coerced._error)
+	var assigned := _assign_property(node, property_name, prop_info, params.get("value"))
+	if assigned.has("error"):
+		return _err(int(assigned.get("code", -32001)), assigned.error)
 
-	node.set(property_name, coerced)
-	# Safety net: Godot silently drops assignments that don't fit the property type
-	# (e.g. non-Resource assigned to a Resource-typed slot). Detect that instead of
-	# returning a misleading "value": "<Object#null>" echo.
-	var stored = node.get(property_name)
-	if coerced != null and stored == null and prop_info.type == TYPE_OBJECT:
-		return _err(-32001,
-			"property '%s' on %s was not accepted (assignment silently dropped — target expects a %s; passed value type didn't match)" %
-			[property_name, node.get_class(), prop_info.get("hint_string", "Resource")])
 	EditorInterface.mark_scene_as_unsaved()
 
 	return _ok({
 		"node_path": node_path,
 		"property": property_name,
-		"value": Coerce.to_json(stored),
+		"value": Coerce.to_json(assigned.stored),
 	})
+
+
+# Assign a JSON-native value into node[property_name], handling three failure
+# modes the bare `node.set()` path gets wrong:
+#
+#   1. Node-typed @exports (`@export var foo: Node2D`) — TYPE_OBJECT with a
+#      PROPERTY_HINT_NODE_TYPE hint. A path string must be resolved to the actual
+#      Node so PackedScene.pack() emits the `node_paths=PackedStringArray(...)`
+#      metadata and serializes it (the inspector drag-drop equivalent). A bare
+#      string assignment is silently dropped at save time.
+#   2. Setter-routed properties (notably PROPERTY_USAGE_NO_EDITOR ones like
+#      `unique_name_in_owner`) — `node.set()` doesn't reliably dispatch to the
+#      registered setter. If the readback doesn't match, route through the
+#      explicit `set_<name>` method.
+#   3. Silently-dropped assignments — Godot accepts the set() call but drops the
+#      value (type mismatch on a Resource slot, or a primitive that didn't take).
+#      Surface an error instead of echoing a misleading value.
+#
+# Returns {"stored": <value>} on success, or {"error": msg, "code": int} on failure.
+static func _assign_property(node: Node, property_name: String, prop_info: Dictionary, raw_value) -> Dictionary:
+	# Case 1: node-typed export. Resolve a path string to the actual Node.
+	if prop_info.type == TYPE_OBJECT and int(prop_info.get("hint", 0)) == PROPERTY_HINT_NODE_TYPE:
+		if raw_value == null:
+			node.set(property_name, null)
+			return {"stored": null}
+		if not (raw_value is String):
+			return {"code": -32602, "error":
+				"node-typed export '%s' expects a node path string (e.g. '../Target'), got %s" %
+				[property_name, type_string(typeof(raw_value))]}
+		var target := node.get_node_or_null(NodePath(raw_value))
+		if target == null:
+			return {"code": -32001, "error":
+				"node-typed export '%s' on %s: no node at path '%s' (resolved relative to '%s'). " %
+				[property_name, node.get_class(), raw_value, node.name] +
+				"The target node must already exist in the scene."}
+		node.set(property_name, target)
+		var stored_node = node.get(property_name)
+		if stored_node != target:
+			return {"code": -32001, "error":
+				"node-typed export '%s' on %s: assignment dropped — resolved node is a %s but the slot expects a %s" %
+				[property_name, node.get_class(), target.get_class(), prop_info.get("hint_string", "Node")]}
+		return {"stored": stored_node}
+
+	var coerced = Coerce.coerce(raw_value, prop_info.type)
+	if coerced is Dictionary and coerced.has("_error"):
+		return {"code": -32602, "error": coerced._error}
+
+	node.set(property_name, coerced)
+	var stored = node.get(property_name)
+
+	# Case 2: setter routing. Some properties don't dispatch through node.set();
+	# if the readback diverged and an explicit setter exists, go through it.
+	if not _values_match(stored, coerced) and node.has_method("set_" + property_name):
+		node.call("set_" + property_name, coerced)
+		stored = node.get(property_name)
+
+	# Case 3a: Resource-typed slot silently rejected a non-Resource value.
+	if coerced != null and stored == null and prop_info.type == TYPE_OBJECT:
+		return {"code": -32001, "error":
+			"property '%s' on %s was not accepted (assignment silently dropped — target expects a %s; passed value type didn't match)" %
+			[property_name, node.get_class(), prop_info.get("hint_string", "Resource")]}
+
+	# Case 3b: a bool that didn't take. Limited to bool (the documented pitfall,
+	# e.g. unique_name_in_owner) because other primitives legitimately transform
+	# on set (name auto-deduplicates, ints clamp to range, floats lose precision),
+	# which would make a strict match check fire false positives.
+	if prop_info.type == TYPE_BOOL and not _values_match(stored, coerced):
+		return {"code": -32001, "error":
+			"property '%s' on %s was not accepted (set silently dropped: requested %s, stored %s)" %
+			[property_name, node.get_class(), str(coerced), str(stored)]}
+
+	return {"stored": stored}
+
+
+# Equality check tolerant of GDScript's cross-type Variant comparison. Used to
+# detect whether an assignment actually took before deciding to route through a
+# setter or flag a silent drop.
+static func _values_match(a, b) -> bool:
+	return a == b
 
 
 # scene.remove_node — operates on the currently-edited scene. Cannot remove the scene root.
@@ -574,12 +644,9 @@ static func _build_subtree(spec, parent: Node, scene_root: Node, created_nodes: 
 			var prop_info: Dictionary = by_name[prop_name]
 			if int(prop_info.get("usage", 0)) & PROPERTY_USAGE_READ_ONLY:
 				return "property '%s' on '%s' is read-only" % [prop_name, this_path]
-			var coerced = Coerce.coerce(properties[prop_name], prop_info.type)
-			if coerced is Dictionary and coerced.has("_error"):
-				return "property '%s' on '%s': %s" % [prop_name, this_path, coerced._error]
-			inst.set(prop_name, coerced)
-			if coerced != null and inst.get(prop_name) == null and prop_info.type == TYPE_OBJECT:
-				return "property '%s' on '%s' was not accepted (assignment silently dropped)" % [prop_name, this_path]
+			var assigned := _assign_property(inst, prop_name, prop_info, properties[prop_name])
+			if assigned.has("error"):
+				return "property '%s' on '%s': %s" % [prop_name, this_path, assigned.error]
 
 	var children: Array = spec.get("children", [])
 	for child_spec in children:
