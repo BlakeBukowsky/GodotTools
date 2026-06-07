@@ -17,7 +17,12 @@ extends RefCounted
 static func coerce(value, target_type: int):
 	match target_type:
 		TYPE_BOOL:
-			return bool(value)
+			# Godot 4 has no `bool()` constructor (it errors at runtime). Convert via
+			# truthiness, but parse strings explicitly so "false"/"0" don't read as
+			# truthy the way any non-empty string otherwise would.
+			if value is String:
+				return value.strip_edges().to_lower() in ["true", "1", "yes", "on"]
+			return true if value else false
 		TYPE_INT:
 			return int(value)
 		TYPE_FLOAT:

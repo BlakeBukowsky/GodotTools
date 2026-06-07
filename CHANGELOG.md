@@ -3,6 +3,25 @@
 All notable changes to this project will be documented here. Versions on the Godot addon
 (`addons/agent_tools/plugin.cfg`) and the MCP shim (`mcp/package.json`) stay in sync.
 
+## [0.3.1] — 2026-06-06
+
+Bug-fix release.
+
+### Fixed
+
+- **`resources/templates/list` no longer errors in Continue / other MCP clients.** The shim handled `resources/list` and `resources/read` but not `resources/templates/list`, which some clients (VS Code's Continue plugin) probe during connection setup. The unhandled method returned JSON-RPC `-32601` ("Method not found"), which Continue surfaced as `Error loading resource templates for MCP Server godot-agent-tools`. The shim now registers a handler returning an empty template list (this server exposes only fixed-URI resources, no URI templates). Tools and resources were unaffected — this only silences the spurious error prompt.
+- **`scene.set_property` no longer silently drops node-typed `@export` references.** An `@export var foo: Node2D` (TYPE_OBJECT with a `PROPERTY_HINT_NODE_TYPE` hint) was assigned the raw path string, which `PackedScene.pack()` dropped at save time — the property was absent from the `.tscn`. The tool now resolves the path string to the actual Node (relative to the target node) and assigns the reference, so Godot emits the `node_paths=PackedStringArray(...)` metadata and serializes it exactly like an inspector drag-drop. Pass `null` to clear.
+- **`scene.set_property` now sets `unique_name_in_owner` (and other setter-routed properties).** `PROPERTY_USAGE_NO_EDITOR` properties like `unique_name_in_owner` don't reliably dispatch through `node.set()`; the value was dropped while the tool reported success. The tool now detects the failed readback and routes through the explicit `set_<name>` setter when one exists.
+- **`scene.set_property` surfaces silently-dropped boolean assignments** instead of echoing a misleading value, closing the "tool succeeded → assume done" trap for the most common case.
+- **Boolean coercion no longer crashes.** `Coerce.coerce()` used `bool(value)`, but Godot 4 has no `bool()` constructor — it throws `Invalid call. Nonexistent 'bool' constructor` at runtime, so *every* `TYPE_BOOL` assignment failed (the value became null and cascaded into downstream errors). Bool coercion now uses truthiness with explicit string parsing (`"false"`/`"0"`/`"no"`/`"off"` → false). This affected any tool that sets a boolean property (`scene.set_property`, `scene.build_tree`, `resource.set_property`, theme/property paths).
+- `scene.build_tree` shares the same hardened assignment path, so all the above apply to bulk subtree construction too.
+
+### Security / hardening
+
+- **Path-traversal escape in `fs.read_text` / `fs.write_text` / `user_fs.read` / `user_fs.list` closed.** These guarded only with `begins_with("res://"/"user://")`, which is not a sandbox — Godot resolves `..` against the real filesystem, so `res://../../<anything>` allowed arbitrary file read/write outside the project (and outside `user://`). The tools now globalize the path, collapse `..`, and reject anything that resolves outside the prefix root. (Localhost-bound by default, so this was reachable by a misdirected agent or — only if the server is bound to a non-loopback interface — the network.)
+- **`client.configure` / `client.remove` no longer clobber an unparseable config.** Previously an existing config that failed to parse as JSON (a transient syntax error, or a JSONC file with comments) was treated as empty, so the rewrite wiped every other key in files like `~/.claude.json`. The tools now abort with an error instead of overwriting, and back up any existing file to `<config>.bak` before writing.
+- **`session_list` reports the active session correctly.** The `active` flag compared object identity against a freshly-parsed list and was always `false` for the default (most-recently-started) session; it now compares by PID.
+
 ## [0.3.0] — 2026-04-21
 
 Competitive-parity pass against the broader Godot-AI tool surface, plus MCP Resources.

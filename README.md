@@ -228,6 +228,18 @@ In Zed's `settings.json` (*Cmd/Ctrl+,*):
 ```
 </details>
 
+<details>
+<summary><b>Codex CLI</b></summary>
+
+File: `~/.codex/config.toml`. Codex uses TOML (not JSON) — add:
+
+```toml
+[mcp_servers.godot-agent-tools]
+command = "npx"
+args = ["-y", "godot-agent-tools-mcp"]
+```
+</details>
+
 ### Environment variables (shim side, optional)
 
 | Var | Default | Purpose |

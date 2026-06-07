@@ -8,6 +8,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import net from "node:net";
@@ -1309,7 +1310,7 @@ class GodotClient {
 const client = new GodotClient(HOST);
 
 const server = new Server(
-  { name: "godot-agent-tools", version: "0.3.0" },
+  { name: "godot-agent-tools", version: "0.3.1" },
   { capabilities: { tools: {}, resources: {} } }
 );
 
@@ -1382,9 +1383,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   // session_list / session_activate are shim-local — they manage the MCP shim's
   // own routing state and don't forward to any Godot process.
   if (tool.method === "__local__.session_list") {
-    const sessions = listSessions().map((s) => ({
+    const all = listSessions();
+    // Default target is the most-recently-started session (all[0]). Compare by
+    // pid — listSessions() returns freshly-parsed objects each call, so object
+    // identity (s === listSessions()[0]) would never hold.
+    const defaultPid = all.length > 0 ? all[0].pid : null;
+    const sessions = all.map((s) => ({
       ...s,
-      active: activeSessionPid != null ? s.pid === activeSessionPid : s === listSessions()[0],
+      active: activeSessionPid != null ? s.pid === activeSessionPid : s.pid === defaultPid,
     }));
     return {
       content: [{ type: "text", text: JSON.stringify({ sessions, count: sessions.length, active_pid: activeSessionPid }, null, 2) }],
@@ -1429,6 +1435,15 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => ({
     description,
     mimeType,
   })),
+}));
+
+// resources/templates/list — this server exposes only fixed-URI resources, not
+// URI templates. But MCP clients (e.g. VS Code's Continue plugin) probe this
+// method during connection setup; without a handler the SDK answers -32601
+// "Method not found", which Continue surfaces as a scary "Error loading resource
+// templates" prompt. Answer with an empty template list so the probe succeeds.
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: [],
 }));
 
 server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
