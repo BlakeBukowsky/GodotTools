@@ -27,13 +27,15 @@ static func list_clients(_params: Dictionary) -> Dictionary:
 		if info.has("_error"):
 			out.append({"client": client_id, "error": info._error})
 			continue
-		var cfg := _read_config(info.path)
+		var res := _read_config(info.path)
+		var cfg: Dictionary = res.cfg
 		var installed := _has_server_entry(cfg, info.format)
 		out.append({
 			"client": client_id,
 			"config_path": info.path,
 			"exists": _path_exists(info.path),
 			"configured": installed,
+			"unparseable": res.unparseable,
 		})
 	return _ok({"clients": out})
 
@@ -47,7 +49,10 @@ static func configure(params: Dictionary) -> Dictionary:
 	if info.has("_error"):
 		return _err(-32602, info._error)
 
-	var cfg := _read_config(info.path)
+	var res := _read_config(info.path)
+	if res.unparseable:
+		return _err(-32001, "existing config is not valid JSON — refusing to overwrite (fix or remove it first): %s" % info.path)
+	var cfg: Dictionary = res.cfg
 	if _has_server_entry(cfg, info.format) and not overwrite:
 		return _ok({"client": client_id, "path": info.path, "status": "already_configured"})
 
@@ -66,7 +71,10 @@ static func remove(params: Dictionary) -> Dictionary:
 	if info.has("_error"):
 		return _err(-32602, info._error)
 
-	var cfg := _read_config(info.path)
+	var res := _read_config(info.path)
+	if res.unparseable:
+		return _err(-32001, "existing config is not valid JSON — refusing to modify (fix or remove it first): %s" % info.path)
+	var cfg: Dictionary = res.cfg
 	if not _has_server_entry(cfg, info.format):
 		return _ok({"client": client_id, "path": info.path, "status": "not_present"})
 
@@ -133,6 +141,11 @@ static func _path_exists(path: String) -> bool:
 	return FileAccess.file_exists(path)
 
 
+# Returns {"cfg": Dictionary, "unparseable": bool}. unparseable=true means the
+# file exists with non-empty content that is NOT a valid JSON object — callers
+# that go on to WRITE must abort, since merging into {} would wipe the user's
+# data (e.g. a large ~/.claude.json with a transient syntax error, or a JSONC
+# file with comments that JSON.parse_string can't handle).
 static func _read_config(path: String) -> Dictionary:
 	var content := ""
 	if _path_exists(path):
@@ -141,11 +154,11 @@ static func _read_config(path: String) -> Dictionary:
 			content = f.get_as_text()
 			f.close()
 	if content.strip_edges() == "":
-		return {}
+		return {"cfg": {}, "unparseable": false}
 	var parsed = JSON.parse_string(content)
 	if typeof(parsed) != TYPE_DICTIONARY:
-		return {}
-	return parsed
+		return {"cfg": {}, "unparseable": true}
+	return {"cfg": parsed, "unparseable": false}
 
 
 static func _write_config(path: String, cfg: Dictionary) -> String:
@@ -154,6 +167,18 @@ static func _write_config(path: String, cfg: Dictionary) -> String:
 		var derr := DirAccess.make_dir_recursive_absolute(dir_path)
 		if derr != OK:
 			return "mkdir failed for %s (%d)" % [dir_path, derr]
+	# Back up any existing non-empty file before overwriting, so a mistaken merge
+	# or an interrupted write is recoverable.
+	if FileAccess.file_exists(path):
+		var prev := FileAccess.open(path, FileAccess.READ)
+		if prev:
+			var prev_content := prev.get_as_text()
+			prev.close()
+			if prev_content.strip_edges() != "":
+				var bak := FileAccess.open(path + ".bak", FileAccess.WRITE)
+				if bak:
+					bak.store_string(prev_content)
+					bak.close()
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return "could not open for write: %s (error %d)" % [path, FileAccess.get_open_error()]

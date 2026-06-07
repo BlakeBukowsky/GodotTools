@@ -1383,9 +1383,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   // session_list / session_activate are shim-local — they manage the MCP shim's
   // own routing state and don't forward to any Godot process.
   if (tool.method === "__local__.session_list") {
-    const sessions = listSessions().map((s) => ({
+    const all = listSessions();
+    // Default target is the most-recently-started session (all[0]). Compare by
+    // pid — listSessions() returns freshly-parsed objects each call, so object
+    // identity (s === listSessions()[0]) would never hold.
+    const defaultPid = all.length > 0 ? all[0].pid : null;
+    const sessions = all.map((s) => ({
       ...s,
-      active: activeSessionPid != null ? s.pid === activeSessionPid : s === listSessions()[0],
+      active: activeSessionPid != null ? s.pid === activeSessionPid : s.pid === defaultPid,
     }));
     return {
       content: [{ type: "text", text: JSON.stringify({ sessions, count: sessions.length, active_pid: activeSessionPid }, null, 2) }],

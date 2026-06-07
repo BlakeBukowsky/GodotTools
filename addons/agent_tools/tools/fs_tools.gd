@@ -59,6 +59,8 @@ static func read_text(params: Dictionary) -> Dictionary:
 		return _err(-32602, "missing 'path'")
 	if not path.begins_with("res://"):
 		return _err(-32602, "path must begin with 'res://' (use user_fs.read for user:// files)")
+	if not _within_sandbox(path, "res://"):
+		return _err(-32602, "path escapes the res:// project sandbox ('..' traversal not allowed): %s" % path)
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return _err(-32001, "failed to open %s (error %d)" % [path, FileAccess.get_open_error()])
@@ -80,6 +82,8 @@ static func write_text(params: Dictionary) -> Dictionary:
 		return _err(-32602, "missing 'path'")
 	if not path.begins_with("res://"):
 		return _err(-32602, "path must begin with 'res://'")
+	if not _within_sandbox(path, "res://"):
+		return _err(-32602, "path escapes the res:// project sandbox ('..' traversal not allowed): %s" % path)
 	if FileAccess.file_exists(path) and not overwrite:
 		return _err(-32602, "file exists (pass overwrite:true to replace): %s" % path)
 
@@ -120,6 +124,16 @@ static func _walk(dir_path: String, exts: Array, out: Array, include_addons: boo
 					out.append(full)
 					break
 	d.list_dir_end()
+
+
+# Path-traversal guard. `begins_with("res://")` is NOT a sandbox — Godot resolves
+# `..` segments against the real filesystem, so "res://../../etc/x" escapes the
+# project. Globalize to an absolute path, collapse `..`, and confirm the result
+# stays inside the (globalized, collapsed) prefix root.
+static func _within_sandbox(path: String, prefix: String) -> bool:
+	var root := ProjectSettings.globalize_path(prefix).simplify_path().trim_suffix("/")
+	var abs := ProjectSettings.globalize_path(path).simplify_path()
+	return abs == root or abs.begins_with(root + "/")
 
 
 static func _ok(data) -> Dictionary:

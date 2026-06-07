@@ -15,6 +15,8 @@ static func read(params: Dictionary) -> Dictionary:
 		return _err(-32602, "missing 'path'")
 	if not path.begins_with("user://"):
 		return _err(-32602, "path must begin with 'user://'")
+	if not _within_sandbox(path, "user://"):
+		return _err(-32602, "path escapes the user:// sandbox ('..' traversal not allowed): %s" % path)
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return _err(-32001, "failed to open: %s (error %d)" % [path, FileAccess.get_open_error()])
@@ -36,6 +38,8 @@ static func list(params: Dictionary) -> Dictionary:
 
 	if not dir_path.begins_with("user://"):
 		return _err(-32602, "dir must begin with 'user://'")
+	if not _within_sandbox(dir_path, "user://"):
+		return _err(-32602, "dir escapes the user:// sandbox ('..' traversal not allowed): %s" % dir_path)
 
 	var files: Array = []
 	var dirs: Array = []
@@ -70,6 +74,14 @@ static func _walk(dir_path: String, out_files: Array, out_dirs: Array, recursive
 		else:
 			out_files.append(full)
 	d.list_dir_end()
+
+
+# Path-traversal guard — see fs_tools._within_sandbox. `begins_with("user://")`
+# is not a sandbox; `..` segments resolve against the real filesystem.
+static func _within_sandbox(path: String, prefix: String) -> bool:
+	var root := ProjectSettings.globalize_path(prefix).simplify_path().trim_suffix("/")
+	var abs := ProjectSettings.globalize_path(path).simplify_path()
+	return abs == root or abs.begins_with(root + "/")
 
 
 static func _ok(data) -> Dictionary:

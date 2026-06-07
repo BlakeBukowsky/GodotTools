@@ -16,6 +16,12 @@ Bug-fix release.
 - **Boolean coercion no longer crashes.** `Coerce.coerce()` used `bool(value)`, but Godot 4 has no `bool()` constructor — it throws `Invalid call. Nonexistent 'bool' constructor` at runtime, so *every* `TYPE_BOOL` assignment failed (the value became null and cascaded into downstream errors). Bool coercion now uses truthiness with explicit string parsing (`"false"`/`"0"`/`"no"`/`"off"` → false). This affected any tool that sets a boolean property (`scene.set_property`, `scene.build_tree`, `resource.set_property`, theme/property paths).
 - `scene.build_tree` shares the same hardened assignment path, so all the above apply to bulk subtree construction too.
 
+### Security / hardening
+
+- **Path-traversal escape in `fs.read_text` / `fs.write_text` / `user_fs.read` / `user_fs.list` closed.** These guarded only with `begins_with("res://"/"user://")`, which is not a sandbox — Godot resolves `..` against the real filesystem, so `res://../../<anything>` allowed arbitrary file read/write outside the project (and outside `user://`). The tools now globalize the path, collapse `..`, and reject anything that resolves outside the prefix root. (Localhost-bound by default, so this was reachable by a misdirected agent or — only if the server is bound to a non-loopback interface — the network.)
+- **`client.configure` / `client.remove` no longer clobber an unparseable config.** Previously an existing config that failed to parse as JSON (a transient syntax error, or a JSONC file with comments) was treated as empty, so the rewrite wiped every other key in files like `~/.claude.json`. The tools now abort with an error instead of overwriting, and back up any existing file to `<config>.bak` before writing.
+- **`session_list` reports the active session correctly.** The `active` flag compared object identity against a freshly-parsed list and was always `false` for the default (most-recently-started) session; it now compares by PID.
+
 ## [0.3.0] — 2026-04-21
 
 Competitive-parity pass against the broader Godot-AI tool surface, plus MCP Resources.
