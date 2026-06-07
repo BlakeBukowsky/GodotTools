@@ -129,7 +129,7 @@ static func set_property(params: Dictionary) -> Dictionary:
 	return _ok({
 		"node_path": node_path,
 		"property": property_name,
-		"value": Coerce.to_json(assigned.stored),
+		"value": Coerce.to_json(assigned.get("stored")),
 	})
 
 

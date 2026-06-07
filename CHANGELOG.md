@@ -13,7 +13,8 @@ Bug-fix release.
 - **`scene.set_property` no longer silently drops node-typed `@export` references.** An `@export var foo: Node2D` (TYPE_OBJECT with a `PROPERTY_HINT_NODE_TYPE` hint) was assigned the raw path string, which `PackedScene.pack()` dropped at save time — the property was absent from the `.tscn`. The tool now resolves the path string to the actual Node (relative to the target node) and assigns the reference, so Godot emits the `node_paths=PackedStringArray(...)` metadata and serializes it exactly like an inspector drag-drop. Pass `null` to clear.
 - **`scene.set_property` now sets `unique_name_in_owner` (and other setter-routed properties).** `PROPERTY_USAGE_NO_EDITOR` properties like `unique_name_in_owner` don't reliably dispatch through `node.set()`; the value was dropped while the tool reported success. The tool now detects the failed readback and routes through the explicit `set_<name>` setter when one exists.
 - **`scene.set_property` surfaces silently-dropped boolean assignments** instead of echoing a misleading value, closing the "tool succeeded → assume done" trap for the most common case.
-- `scene.build_tree` shares the same hardened assignment path, so all three fixes apply to bulk subtree construction too.
+- **Boolean coercion no longer crashes.** `Coerce.coerce()` used `bool(value)`, but Godot 4 has no `bool()` constructor — it throws `Invalid call. Nonexistent 'bool' constructor` at runtime, so *every* `TYPE_BOOL` assignment failed (the value became null and cascaded into downstream errors). Bool coercion now uses truthiness with explicit string parsing (`"false"`/`"0"`/`"no"`/`"off"` → false). This affected any tool that sets a boolean property (`scene.set_property`, `scene.build_tree`, `resource.set_property`, theme/property paths).
+- `scene.build_tree` shares the same hardened assignment path, so all the above apply to bulk subtree construction too.
 
 ## [0.3.0] — 2026-04-21
 
